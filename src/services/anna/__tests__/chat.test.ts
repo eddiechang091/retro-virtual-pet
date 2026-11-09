@@ -1,22 +1,15 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  buildPetChatMessages,
-  cleanPetReply,
-  generatePetReply,
-  parsePetReplyResult,
-  isUsableSuggestion,
-  getDefaultSuggestions,
-  loadChatHistory,
-  saveChatHistory,
-  appendChatExchange,
-  clearChatHistory,
-  CHAT_HISTORY_KEY,
-  MAX_CHAT_EXCHANGES,
-  MAX_CHAT_SUGGESTIONS,
+  buildPetDialogueMessages,
+  cleanDialogueText,
+  generatePetDialogue,
+  isUsableDialogueOption,
+  parsePetDialogueResult,
+  DEFAULT_DIALOGUE_RESPONSE,
+  MAX_DIALOGUE_QUESTION_CHARS,
 } from "@/services/anna/chat";
 import { LlmUnavailableError } from "@/services/anna/llm";
 import { createInitialPet } from "@/game/gameState";
-import type { ChatExchange } from "@/services/anna/chat";
 import type { PetState as GamePetState } from "@/game/types";
 
 function makePet(overrides: Partial<GamePetState> = {}): GamePetState {
@@ -31,13 +24,21 @@ function makePet(overrides: Partial<GamePetState> = {}): GamePetState {
   };
 }
 
-function makeExchange(n: number): ChatExchange {
-  return { user: `hello ${n}`, pet: `chirp ${n}!`, at: n };
+function makeRawDialogue(overrides: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    situation: "Curious Question",
+    question: "What is the big world outside this tiny LCD screen like?",
+    options: [
+      { text: "It is vast and wonderful", response: "Wow! Sounds super cool!" },
+      { text: "I love being right here", response: "Hehe, I love being with you most!" },
+    ],
+    ...overrides,
+  });
 }
 
-describe("buildPetChatMessages", () => {
+describe("buildPetDialogueMessages", () => {
   it("names the species, stage, favourite food and hobby in the system prompt", () => {
-    const messages = buildPetChatMessages({ pet: makePet(), history: [], userText: "hi!" });
+    const messages = buildPetDialogueMessages({ pet: makePet() });
     const system = messages[0];
     expect(system.role).toBe("system");
     expect(system.content).toContain("Pip Chick");
@@ -47,247 +48,188 @@ describe("buildPetChatMessages", () => {
     expect(system.content).toContain("Bobo");
   });
 
-  it("caps the reply at 1-2 short sentences and 140 characters in the system prompt", () => {
-    const messages = buildPetChatMessages({ pet: makePet(), history: [], userText: "hi!" });
-    expect(messages[0].content).toContain("1-2 short sentences");
-    expect(messages[0].content).toContain("140 characters");
+  it("includes the live stats and counters in the system prompt", () => {
+    const messages = buildPetDialogueMessages({
+      pet: makePet({ hunger: 25, ageDays: 3, weightGrams: 15, totalMeals: 8 }),
+    });
+    expect(messages[0].content).toContain("hunger 25/100");
+    expect(messages[0].content).toContain("3 days old");
+    expect(messages[0].content).toContain("15g");
+    expect(messages[0].content).toContain("8 meals");
   });
 
-  it("tells the model never to claim to be human or a generic AI assistant", () => {
-    const messages = buildPetChatMessages({ pet: makePet(), history: [], userText: "hi!" });
-    expect(messages[0].content).toContain("Never claim to be human or a generic AI assistant");
-  });
-
-  it("asks the model for JSON with a reply and 2-3 follow-up suggestions", () => {
-    const messages = buildPetChatMessages({ pet: makePet(), history: [], userText: "hi!" });
-    expect(messages[0].content).toContain('"reply"');
-    expect(messages[0].content).toContain('"suggestions"');
-    expect(messages[0].content).toContain("10 words");
-  });
-
-  it("reacts to live stats: a hungry pet says so in the system prompt", () => {
-    const messages = buildPetChatMessages({
-      pet: makePet({ hunger: 10 }),
-      history: [],
-      userText: "hi!",
+  it("reacts to live conditions: a hungry, sick, sleepy pet says so", () => {
+    const messages = buildPetDialogueMessages({
+      pet: makePet({ hunger: 10, isSick: true, isSleeping: true, energy: 10, poopCount: 2 }),
     });
     expect(messages[0].content).toContain("very hungry");
-  });
-
-  it("reacts to live stats: a sick, sleepy pet says so in the system prompt", () => {
-    const messages = buildPetChatMessages({
-      pet: makePet({ isSick: true, isSleeping: true, energy: 10 }),
-      history: [],
-      userText: "hi!",
-    });
     expect(messages[0].content).toContain("sick");
     expect(messages[0].content).toContain("sleepy");
     expect(messages[0].content).toContain("low on energy");
+    expect(messages[0].content).toContain("clean-up");
   });
 
-  it("caps history at the last 6 exchanges", () => {
-    const history = Array.from({ length: 8 }, (_, i) => makeExchange(i + 1));
-    const messages = buildPetChatMessages({ pet: makePet(), history, userText: "new message" });
-    // system + 6 exchanges x 2 + the new user message
-    expect(messages).toHaveLength(1 + MAX_CHAT_EXCHANGES * 2 + 1);
-    const userTexts = messages.filter((m) => m.role === "user").map((m) => m.content);
-    expect(userTexts).toEqual([
-      "hello 3",
-      "hello 4",
-      "hello 5",
-      "hello 6",
-      "hello 7",
-      "hello 8",
-      "new message",
-    ]);
+  it("includes the active event title when one is passed", () => {
+    const messages = buildPetDialogueMessages({
+      pet: makePet(),
+      activeEventTitle: "Shiny Mystery Coin",
+    });
+    expect(messages[0].content).toContain("Shiny Mystery Coin");
+  });
+
+  it("mentions no event when none is active", () => {
+    const messages = buildPetDialogueMessages({ pet: makePet() });
+    expect(messages[0].content).not.toContain("Something just happened");
+  });
+
+  it("asks for JSON with a situation, one question and exactly 2 options", () => {
+    const messages = buildPetDialogueMessages({ pet: makePet() });
+    expect(messages[0].content).toContain('"situation"');
+    expect(messages[0].content).toContain('"question"');
+    expect(messages[0].content).toContain('"options"');
+    expect(messages[0].content).toContain("exactly 2");
+    expect(messages[0].content).toContain("1 short sentence");
+    expect(messages[0].content).toContain("140 characters");
+    expect(messages[0].content).toContain("10 words");
+  });
+
+  it("tells the model never to claim to be human or a generic AI assistant", () => {
+    const messages = buildPetDialogueMessages({ pet: makePet() });
+    expect(messages[0].content).toContain("Never claim to be human or a generic AI assistant");
   });
 });
 
-describe("cleanPetReply", () => {
+describe("cleanDialogueText", () => {
   it("strips wrapping quotes", () => {
-    expect(cleanPetReply('"Chirp chirp! Hello!"')).toBe("Chirp chirp! Hello!");
-    expect(cleanPetReply("“Peep! Hi there!”")).toBe("Peep! Hi there!");
+    expect(cleanDialogueText('"Chirp chirp! Hello!"')).toBe("Chirp chirp! Hello!");
+    expect(cleanDialogueText("“Peep! Hi there!”")).toBe("Peep! Hi there!");
   });
 
   it("collapses whitespace and newlines into single spaces", () => {
-    expect(cleanPetReply("  Chirp\n\n  chirp\t peep!  ")).toBe("Chirp chirp peep!");
+    expect(cleanDialogueText("  Chirp\n\n  chirp\t peep!  ")).toBe("Chirp chirp peep!");
   });
 
-  it("caps the reply at 140 characters", () => {
+  it("caps the text at 140 characters", () => {
     const long = "x".repeat(200);
-    expect(cleanPetReply(long)).toHaveLength(140);
+    expect(cleanDialogueText(long)).toHaveLength(MAX_DIALOGUE_QUESTION_CHARS);
   });
 
   it("returns an empty string for a blank reply", () => {
-    expect(cleanPetReply("   \n  ")).toBe("");
+    expect(cleanDialogueText("   \n  ")).toBe("");
   });
 });
 
-describe("chat history persistence", () => {
-  beforeEach(() => {
-    localStorage.removeItem(CHAT_HISTORY_KEY);
+describe("isUsableDialogueOption", () => {
+  it("accepts a short option", () => {
+    expect(isUsableDialogueOption("Want a yummy snack?")).toBe(true);
+    expect(isUsableDialogueOption("Let's play a fun game!")).toBe(true);
   });
 
-  it("round-trips through localStorage", () => {
-    const history = [makeExchange(1), makeExchange(2)];
-    saveChatHistory(history);
-    expect(loadChatHistory()).toEqual(history);
+  it("rejects empty options", () => {
+    expect(isUsableDialogueOption("")).toBe(false);
+    expect(isUsableDialogueOption("   ")).toBe(false);
   });
 
-  it("caps stored history at 6 exchanges", () => {
-    const history = Array.from({ length: 9 }, (_, i) => makeExchange(i + 1));
-    saveChatHistory(history);
-    const loaded = loadChatHistory();
-    expect(loaded).toHaveLength(MAX_CHAT_EXCHANGES);
-    expect(loaded[0].user).toBe("hello 4");
+  it("rejects options over 10 words", () => {
+    expect(
+      isUsableDialogueOption("Let's go outside and play a very long game of hide and seek today"),
+    ).toBe(false);
   });
 
-  it("appendChatExchange caps at 6 exchanges", () => {
-    let history = Array.from({ length: 6 }, (_, i) => makeExchange(i + 1));
-    history = appendChatExchange(history, makeExchange(7));
-    expect(history).toHaveLength(6);
-    expect(history[0].user).toBe("hello 2");
-    expect(history[5].user).toBe("hello 7");
-  });
-
-  it("returns [] for corrupt stored data", () => {
-    localStorage.setItem(CHAT_HISTORY_KEY, "not json{");
-    expect(loadChatHistory()).toEqual([]);
-  });
-
-  it("clearChatHistory removes the stored history", () => {
-    saveChatHistory([makeExchange(1)]);
-    clearChatHistory();
-    expect(loadChatHistory()).toEqual([]);
-    expect(localStorage.getItem(CHAT_HISTORY_KEY)).toBeNull();
+  it("rejects an option identical to the other option", () => {
+    expect(isUsableDialogueOption("Want a yummy snack?", "Want a yummy snack?")).toBe(false);
+    expect(isUsableDialogueOption("want a yummy snack?", "Want a yummy snack!")).toBe(false);
   });
 });
 
-describe("isUsableSuggestion", () => {
-  it("accepts a short suggestion", () => {
-    expect(isUsableSuggestion("Want a yummy snack?", [])).toBe(true);
-    expect(isUsableSuggestion("Let's play a fun game together today!", [])).toBe(true);
-  });
-
-  it("rejects empty suggestions", () => {
-    expect(isUsableSuggestion("", [])).toBe(false);
-    expect(isUsableSuggestion("   ", [])).toBe(false);
-  });
-
-  it("rejects suggestions over 10 words", () => {
-    expect(isUsableSuggestion("Let's go outside and play a very long game of hide and seek today", [])).toBe(
-      false,
-    );
-  });
-
-  it("rejects a suggestion the user already said", () => {
-    expect(isUsableSuggestion("Want a yummy snack?", ["Want a yummy snack?"])).toBe(false);
-    expect(isUsableSuggestion("Want a yummy snack?", ["I asked: want a yummy snack please"])).toBe(false);
-  });
-});
-
-describe("getDefaultSuggestions", () => {
-  it("returns at most 3 suggestions, each at most 10 words", () => {
-    const suggestions = getDefaultSuggestions(makePet());
-    expect(suggestions.length).toBeLessThanOrEqual(MAX_CHAT_SUGGESTIONS);
-    expect(suggestions.length).toBeGreaterThan(0);
-    for (const s of suggestions) {
-      expect(s.split(" ").length).toBeLessThanOrEqual(10);
-    }
-  });
-
-  it("suggests food for a hungry pet", () => {
-    const suggestions = getDefaultSuggestions(makePet({ hunger: 10 }));
-    expect(suggestions.some((s) => /snack|eat|hungry/i.test(s))).toBe(true);
-  });
-
-  it("suggests a nap for a sleepy pet", () => {
-    const suggestions = getDefaultSuggestions(makePet({ isSleeping: true, energy: 10 }));
-    expect(suggestions.some((s) => /nap|sleep/i.test(s))).toBe(true);
-  });
-
-  it("suggests play for a happy pet", () => {
-    const suggestions = getDefaultSuggestions(makePet({ happiness: 90 }));
-    expect(suggestions.some((s) => /play|adventure/i.test(s))).toBe(true);
-  });
-
-  it("skips suggestions the user recently said", () => {
-    const suggestions = getDefaultSuggestions(makePet({ hunger: 10 }), ["Want a yummy snack?"]);
-    expect(suggestions).not.toContain("Want a yummy snack?");
-  });
-});
-
-describe("parsePetReplyResult", () => {
-  it("parses a JSON reply with model suggestions", () => {
-    const raw = JSON.stringify({
-      reply: "Chirp chirp! I had a great day!",
-      suggestions: ["Let's play a fun game!", "Tell me a story!", "Want a yummy snack?"],
+describe("parsePetDialogueResult", () => {
+  it("parses a JSON dialogue with a situation, question and 2 options", () => {
+    const parsed = parsePetDialogueResult(makeRawDialogue());
+    expect(parsed.situation).toBe("Curious Question");
+    expect(parsed.question).toBe("What is the big world outside this tiny LCD screen like?");
+    expect(parsed.options).toHaveLength(2);
+    expect(parsed.options[0]).toEqual({
+      text: "It is vast and wonderful",
+      response: "Wow! Sounds super cool!",
     });
-    const parsed = parsePetReplyResult(raw, makePet());
-    expect(parsed.reply).toBe("Chirp chirp! I had a great day!");
-    expect(parsed.suggestions).toEqual([
-      "Let's play a fun game!",
-      "Tell me a story!",
-      "Want a yummy snack?",
-    ]);
   });
 
-  it("drops model suggestions over 10 words and backfills with static defaults", () => {
+  it("caps an over-long question at 140 characters", () => {
+    const parsed = parsePetDialogueResult(makeRawDialogue({ question: "x".repeat(200) }));
+    expect(parsed.question).toHaveLength(MAX_DIALOGUE_QUESTION_CHARS);
+  });
+
+  it("applies the default response when an option has none", () => {
+    const parsed = parsePetDialogueResult(
+      makeRawDialogue({
+        options: [
+          { text: "It is vast and wonderful" },
+          { text: "I love being right here", response: "Hehe!" },
+        ],
+      }),
+    );
+    expect(parsed.options[0].response).toBe(DEFAULT_DIALOGUE_RESPONSE);
+    expect(parsed.options[1].response).toBe("Hehe!");
+  });
+
+  it("defaults the situation to Chat when missing", () => {
     const raw = JSON.stringify({
-      reply: "Peep!",
-      suggestions: [
-        "Let's go outside and play a very long game of hide and seek today",
-        "Let's play a fun game!",
+      question: "Peep?",
+      options: [
+        { text: "Yes, let's play!", response: "Yay!" },
+        { text: "Maybe later", response: "Okay!" },
       ],
     });
-    const parsed = parsePetReplyResult(raw, makePet());
-    expect(parsed.reply).toBe("Peep!");
-    expect(parsed.suggestions).toHaveLength(MAX_CHAT_SUGGESTIONS);
-    expect(parsed.suggestions).toContain("Let's play a fun game!");
-    expect(parsed.suggestions).not.toContain(
-      "Let's go outside and play a very long game of hide and seek today",
-    );
-    for (const s of parsed.suggestions) {
-      expect(s.split(" ").length).toBeLessThanOrEqual(10);
-    }
+    expect(parsePetDialogueResult(raw).situation).toBe("Chat");
   });
 
-  it("dedupes suggestions that repeat what the user recently said", () => {
-    const raw = JSON.stringify({
-      reply: "Peep!",
-      suggestions: ["Want a yummy snack?", "Let's play a fun game!", "Tell me about your day!"],
+  it("throws when a >10-word option leaves fewer than 2 usable options", () => {
+    const raw = makeRawDialogue({
+      options: [
+        { text: "Let's go outside and play a very long game of hide and seek today", response: "Yay!" },
+        { text: "I love being right here", response: "Hehe!" },
+      ],
     });
-    const parsed = parsePetReplyResult(raw, makePet(), ["Want a yummy snack?"]);
-    expect(parsed.suggestions).not.toContain("Want a yummy snack?");
-    expect(parsed.suggestions).toHaveLength(MAX_CHAT_SUGGESTIONS);
+    expect(() => parsePetDialogueResult(raw)).toThrow();
+  });
+
+  it("throws when the two options are identical", () => {
+    const raw = makeRawDialogue({
+      options: [
+        { text: "Let's play!", response: "Yay!" },
+        { text: "Let's play!", response: "Yay!" },
+      ],
+    });
+    expect(() => parsePetDialogueResult(raw)).toThrow();
+  });
+
+  it("throws when the question is missing or empty", () => {
+    expect(() => parsePetDialogueResult(JSON.stringify({ options: [] }))).toThrow();
+    expect(() =>
+      parsePetDialogueResult(
+        makeRawDialogue({ question: "   " }),
+      ),
+    ).toThrow();
   });
 
   it("strips markdown code fences around the JSON", () => {
-    const raw = '```json\n{"reply": "Peep peep!", "suggestions": ["Let\'s play a fun game!"]}\n```';
-    const parsed = parsePetReplyResult(raw, makePet());
-    expect(parsed.reply).toBe("Peep peep!");
-    expect(parsed.suggestions).toContain("Let's play a fun game!");
+    const raw =
+      '```json\n{"situation": "Chat", "question": "Peep peep!", "options": [{"text": "Hi there!", "response": "Chirp!"}, {"text": "Let us play!", "response": "Yay!"}]}\n```';
+    const parsed = parsePetDialogueResult(raw);
+    expect(parsed.question).toBe("Peep peep!");
+    expect(parsed.options).toHaveLength(2);
   });
 
-  it("falls back to plain text + all-static suggestions when JSON parsing fails", () => {
-    const parsed = parsePetReplyResult('"Chirp! Just plain text, no JSON here."', makePet());
-    expect(parsed.reply).toBe("Chirp! Just plain text, no JSON here.");
-    expect(parsed.suggestions).toEqual(getDefaultSuggestions(makePet()));
-    expect(parsed.suggestions).toHaveLength(MAX_CHAT_SUGGESTIONS);
-  });
-
-  it("falls back to plain text + static suggestions when the reply field is missing", () => {
-    const raw = JSON.stringify({ suggestions: ["Let's play a fun game!"] });
-    const parsed = parsePetReplyResult(raw, makePet());
-    expect(parsed.reply).toBe("");
-    expect(parsed.suggestions).toHaveLength(MAX_CHAT_SUGGESTIONS);
+  it("throws on invalid JSON so the caller falls back to canned dialogue", () => {
+    expect(() => parsePetDialogueResult("not json at all")).toThrow();
+    expect(() => parsePetDialogueResult('"just a plain string"')).toThrow();
   });
 });
 
-describe("generatePetReply", () => {
+describe("generatePetDialogue", () => {
   it("throws LlmUnavailableError outside the Anna host", async () => {
-    await expect(
-      generatePetReply({ pet: makePet(), history: [], userText: "hi!" }),
-    ).rejects.toBeInstanceOf(LlmUnavailableError);
+    await expect(generatePetDialogue({ pet: makePet() })).rejects.toBeInstanceOf(
+      LlmUnavailableError,
+    );
   });
 });
