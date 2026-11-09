@@ -3,12 +3,13 @@ import type { LlmMessage } from "./llm";
 import type { PetState } from "../../game/types";
 import { SPECIES_CATALOG } from "../../game/types";
 
-// One-shot LLM dialogue for the pet, powered by Anna llm.complete
-// (text-only). Every CHAT open generates a FRESH question + 2 options from
-// the pet's live state and any active event — no free text, no continuous
-// conversation, no history, nothing persisted. Outside the Anna host the
-// LLM service is unavailable and the app falls back to the canned
-// dialogues in src/game/dialogues.ts — nothing here is called on that path.
+// One-shot LLM dialogue for the pet, powered by the server-side LLM
+// proxy (/api/llm, text-only). Every CHAT open generates a FRESH question
+// + 2 options from the pet's live state and any active event — no free
+// text, no continuous conversation, no history, nothing persisted. When
+// the proxy is unavailable or unconfigured the app falls back to the
+// canned dialogues in src/game/dialogues.ts — nothing here is called on
+// that path.
 
 export const MAX_DIALOGUE_QUESTION_CHARS = 140;
 export const MAX_OPTION_WORDS = 10;
@@ -96,7 +97,7 @@ export function isUsableDialogueOption(candidate: string, otherText = ""): boole
 }
 
 /**
- * Parse one llm.complete result into a PetDialogue. Throws when the JSON
+ * Parse one proxy result into a PetDialogue. Throws when the JSON
  * is unusable, the question is empty, or fewer than 2 options survive the
  * guard — the caller then falls back to a canned dialogue.
  */

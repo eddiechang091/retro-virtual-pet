@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildPetDialogueMessages,
   cleanDialogueText,
@@ -7,8 +7,8 @@ import {
   parsePetDialogueResult,
   DEFAULT_DIALOGUE_RESPONSE,
   MAX_DIALOGUE_QUESTION_CHARS,
-} from "@/services/anna/chat";
-import { LlmUnavailableError } from "@/services/anna/llm";
+} from "@/services/platform/chat";
+import { LlmUnavailableError } from "@/services/platform/llm";
 import { createInitialPet } from "@/game/gameState";
 import type { PetState as GamePetState } from "@/game/types";
 
@@ -227,9 +227,16 @@ describe("parsePetDialogueResult", () => {
 });
 
 describe("generatePetDialogue", () => {
-  it("throws LlmUnavailableError outside the Anna host", async () => {
+  it("throws LlmUnavailableError when the proxy cannot be reached", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("network down");
+      }),
+    );
     await expect(generatePetDialogue({ pet: makePet() })).rejects.toBeInstanceOf(
       LlmUnavailableError,
     );
+    vi.unstubAllGlobals();
   });
 });

@@ -4,8 +4,7 @@ import react from "@vitejs/plugin-react";
 
 // https://vite.dev/config/
 export default defineConfig({
-  // Anna static-spa bundle: relative paths so bundle/index.html works
-  // wherever the host serves it from.
+  // Relative paths so bundle/index.html works wherever it is served from.
   base: "./",
   plugins: [react()],
   resolve: {

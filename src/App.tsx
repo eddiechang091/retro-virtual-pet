@@ -16,8 +16,7 @@ import { HandheldCase } from './game/components/HandheldCase';
 import { LcdScreen } from './game/components/LcdScreen';
 import type { ScreenMode } from './game/components/LcdScreen';
 import { EncyclopediaModal } from './game/components/EncyclopediaModal';
-import { getLlmService } from './services/anna/llm';
-import { generatePetDialogue } from './services/anna/chat';
+import { generatePetDialogue } from './services/platform/chat';
 import { loadShellTheme, saveShellTheme } from './game/shellThemes';
 import type { ShellThemeId } from './game/shellThemes';
 
@@ -39,7 +38,7 @@ const App: FC = () => {
   const [isMuted, setIsMuted] = useState(false);
   const [showEncyclopedia, setShowEncyclopedia] = useState(false);
 
-  // LLM-generated dialogue (Anna LLM) — one-shot question + 2 options,
+  // LLM-generated dialogue (server-side proxy) — one-shot question + 2 options,
   // generated fresh on every CHAT open. No free text, no history.
   const [dialogueLoading, setDialogueLoading] = useState(false);
   // Guards late generatePetDialogue results: bumped whenever the user
@@ -88,7 +87,8 @@ const App: FC = () => {
     return false;
   }, []);
 
-  // Trigger Dialogue (canned fallback — used outside the Anna host)
+  // Trigger Dialogue (canned fallback — used when the LLM proxy is
+  // unavailable or unconfigured)
   const triggerDialogue = useCallback(() => {
     const randomItem = PET_DIALOGUES[Math.floor(Math.random() * PET_DIALOGUES.length)];
     setActiveDialogue(randomItem);
@@ -99,22 +99,12 @@ const App: FC = () => {
   }, [pet.name]);
 
   // CHAT menu: generate a fresh one-shot dialogue (one question, two
-  // options) with Anna LLM when available, and feed it into the existing
-  // canned dialogue flow verbatim. Any failure falls back to a canned
-  // dialogue exactly as before. The LLM check is cached by the Anna
-  // runtime service, so this stays cheap after the first call.
+  // options) through the server-side LLM proxy and feed it into the
+  // existing canned dialogue flow verbatim. No availability pre-check —
+  // the proxy call itself fails fast (unconfigured proxy, no deployment,
+  // offline) and any failure falls back to a canned dialogue exactly
+  // as before.
   const handleChatAction = useCallback(async () => {
-    let llmAvailable = false;
-    try {
-      const llm = await getLlmService();
-      llmAvailable = llm.available;
-    } catch {
-      llmAvailable = false;
-    }
-    if (!llmAvailable) {
-      triggerDialogue();
-      return;
-    }
     const requestId = ++dialogueRequestRef.current;
     setActiveDialogue(null);
     setDialogueChoice(0);
