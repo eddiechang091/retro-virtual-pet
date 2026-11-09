@@ -75,7 +75,7 @@ src/
 
 ## Anna LLM Integration
 
-The pet can hold a free-text conversation via Anna LLM (`llm.complete`, text-only). On the Anna platform, **CHAT** opens a free-text chat screen: type a message (max 140 characters) and the pet replies in character — 1–2 short sentences, reacting to its live stats (hungry, sick, sleepy, low energy, happy). Outside Anna (local dev, plain web), the LLM is unavailable and **CHAT** falls back to the existing canned dialogues, exactly as before.
+The pet can hold a free-text conversation via Anna LLM (`llm.complete`, text-only). On the Anna platform, **CHAT** opens a free-text chat screen: type a message (max 140 characters) and the pet replies in character — 1–2 short sentences, reacting to its live stats (hungry, sick, sleepy, low energy, happy). Above the input, up to 3 suggestion chips offer things to say to the pet: before the first reply they come from static state-based defaults, and after each reply they come from the model's JSON response (`{"reply", "suggestions"}`), filtered by a runtime guard (non-empty, ≤10 words, no repeats of what the user already said) with static defaults backfilling anything dropped. Tapping a chip sends it just like a typed message. Outside Anna (local dev, plain web), the LLM is unavailable and **CHAT** falls back to the existing canned dialogues, exactly as before.
 
 ### Where the code lives
 

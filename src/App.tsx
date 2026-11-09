@@ -19,6 +19,7 @@ import { EncyclopediaModal } from './game/components/EncyclopediaModal';
 import { getLlmService, LlmUnavailableError } from './services/anna/llm';
 import {
   generatePetReply,
+  getDefaultSuggestions,
   loadChatHistory,
   saveChatHistory,
   appendChatExchange,
@@ -52,6 +53,7 @@ const App: FC = () => {
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
+  const [chatSuggestions, setChatSuggestions] = useState<string[]>([]);
   const chatHistoryRef = useRef(chatHistory);
   chatHistoryRef.current = chatHistory;
 
@@ -117,6 +119,11 @@ const App: FC = () => {
     }
     if (llmAvailable) {
       setChatError(null);
+      // Before the first AI reply, chips show static state-based
+      // suggestions so the user can tap one to start the conversation.
+      setChatSuggestions(
+        getDefaultSuggestions(petRef.current, chatHistoryRef.current.map(e => e.user))
+      );
       setScreenMode('ai_chat');
       sound.blip();
       setTickerText(`Chatting with ${pet.name} — type a message!`);
@@ -125,16 +132,17 @@ const App: FC = () => {
     }
   }, [pet.name, triggerDialogue]);
 
-  // Send one free-text message to the pet via Anna LLM.
-  const sendAiChat = useCallback(async () => {
-    const text = chatInput.trim();
+  // Send one free-text message to the pet via Anna LLM. Called with the
+  // typed input, or with a tapped suggestion chip — same path either way.
+  const sendAiChat = useCallback(async (messageText?: string) => {
+    const text = (messageText ?? chatInput).trim();
     if (!text || chatLoading) return;
     const userText = text.slice(0, MAX_CHAT_INPUT_CHARS);
     setChatInput('');
     setChatError(null);
     setChatLoading(true);
     try {
-      const reply = await generatePetReply({
+      const { reply, suggestions } = await generatePetReply({
         pet: petRef.current,
         history: chatHistoryRef.current,
         userText
@@ -146,6 +154,7 @@ const App: FC = () => {
       });
       setChatHistory(nextHistory);
       saveChatHistory(nextHistory);
+      setChatSuggestions(suggestions);
       setPet(p => ({
         ...p,
         mood: Math.min(100, p.mood + 8),
@@ -554,6 +563,8 @@ const App: FC = () => {
           chatInput={chatInput}
           onChatInputChange={setChatInput}
           onSendChat={() => void sendAiChat()}
+          chatSuggestions={chatSuggestions}
+          onSuggestionClick={suggestion => void sendAiChat(suggestion)}
           chatLoading={chatLoading}
           chatError={chatError}
         />

@@ -36,6 +36,8 @@ interface LcdScreenProps {
   chatInput?: string;
   onChatInputChange?: (value: string) => void;
   onSendChat?: () => void;
+  chatSuggestions?: string[];
+  onSuggestionClick?: (suggestion: string) => void;
   chatLoading?: boolean;
   chatError?: string | null;
 }
@@ -56,6 +58,8 @@ export const LcdScreen: FC<LcdScreenProps> = ({
   chatInput = '',
   onChatInputChange,
   onSendChat,
+  chatSuggestions = [],
+  onSuggestionClick,
   chatLoading = false,
   chatError = null
 }) => {
@@ -257,6 +261,23 @@ export const LcdScreen: FC<LcdScreenProps> = ({
                 </div>
               )}
             </div>
+
+            {/* Suggestion chips: tap one to say it to the pet */}
+            {chatSuggestions.length > 0 && (
+              <div className="flex flex-wrap gap-1 my-1">
+                {chatSuggestions.slice(0, 3).map(suggestion => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    onClick={() => onSuggestionClick?.(suggestion)}
+                    disabled={chatLoading}
+                    className="text-[9px] leading-tight text-left border border-[#242926]/60 rounded-full px-1.5 py-0.5 bg-[#838d66] hover:bg-[#242926] hover:text-[#8B956D] disabled:opacity-40 cursor-pointer"
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            )}
 
             <div className="flex gap-1 items-center">
               <input
