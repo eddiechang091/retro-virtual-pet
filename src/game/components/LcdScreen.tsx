@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import type { FC } from 'react';
 import type { PetState, DialogueItem, RandomEvent } from '../types';
 import { SPECIES_CATALOG } from '../types';
+import { MAX_CHAT_INPUT_CHARS } from '../../services/anna/chat';
+import type { ChatExchange } from '../../services/anna/chat';
 import { ICONS, SPRITE_ITEMS, EGG_SPRITES, PET_SPECIES_MAP } from '../sprites';
 import { PixelRenderer } from './PixelRenderer';
 
@@ -10,6 +12,7 @@ export type ScreenMode =
   | 'food_select'
   | 'play_anim'
   | 'dialogue'
+  | 'ai_chat'
   | 'event'
   | 'status'
   | 'evolution'
@@ -29,6 +32,14 @@ interface LcdScreenProps {
   foodChoice: number;
   onSelectAction: (index: number) => void;
   tickerText: string;
+  chatHistory?: ChatExchange[];
+  chatInput?: string;
+  onChatInputChange?: (value: string) => void;
+  onSendChat?: () => void;
+  chatSuggestions?: string[];
+  onSuggestionClick?: (suggestion: string) => void;
+  chatLoading?: boolean;
+  chatError?: string | null;
 }
 
 export const LcdScreen: FC<LcdScreenProps> = ({
@@ -42,7 +53,15 @@ export const LcdScreen: FC<LcdScreenProps> = ({
   eventChoice,
   foodChoice,
   onSelectAction,
-  tickerText
+  tickerText,
+  chatHistory = [],
+  chatInput = '',
+  onChatInputChange,
+  onSendChat,
+  chatSuggestions = [],
+  onSuggestionClick,
+  chatLoading = false,
+  chatError = null
 }) => {
   // 500ms hard frame step for retro 2fps animation
   const [frameTick, setFrameTick] = useState(0);
@@ -205,6 +224,84 @@ export const LcdScreen: FC<LcdScreenProps> = ({
             </div>
 
             <div className="text-[9px] opacity-75 text-center">[A/B] Choose | [B] Send | [C] Exit</div>
+          </div>
+        )}
+
+        {/* Sub-view: AI Chat Mode (Anna LLM) */}
+        {screenMode === 'ai_chat' && (
+          <div className="w-full h-full flex flex-col justify-between p-1 min-h-0">
+            <div className="text-[11px] font-bold text-center border-b border-[#242926]/40 pb-0.5">
+              💬 CHAT WITH {pet.name.toUpperCase()}
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-y-auto my-1 space-y-1 px-0.5">
+              {chatHistory.length === 0 && !chatLoading && (
+                <div className="text-[10px] opacity-75 text-center py-2">
+                  Say hi to {pet.name}! Ask about its day, its favourite food, or anything at all.
+                </div>
+              )}
+              {chatHistory.map((exchange, idx) => (
+                <div key={`${exchange.at}-${idx}`} className="space-y-0.5">
+                  <div className="text-[10px] text-right">
+                    <span className="font-bold">YOU: </span>
+                    {exchange.user}
+                  </div>
+                  <div className="border border-[#242926] bg-[#838d66] p-1 rounded text-[11px] leading-tight">
+                    <span className="font-bold">{pet.name}: </span>
+                    &ldquo;{exchange.pet}&rdquo;
+                  </div>
+                </div>
+              ))}
+              {chatLoading && (
+                <div className="text-[10px] opacity-75 animate-pulse">{pet.name} is thinking…</div>
+              )}
+              {chatError && (
+                <div className="text-[10px] font-bold text-red-900 border border-red-900/50 rounded p-1">
+                  {chatError}
+                </div>
+              )}
+            </div>
+
+            {/* Suggestion chips: tap one to say it to the pet */}
+            {chatSuggestions.length > 0 && (
+              <div className="flex flex-wrap gap-1 my-1">
+                {chatSuggestions.slice(0, 3).map(suggestion => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    onClick={() => onSuggestionClick?.(suggestion)}
+                    disabled={chatLoading}
+                    className="text-[9px] leading-tight text-left border border-[#242926]/60 rounded-full px-1.5 py-0.5 bg-[#838d66] hover:bg-[#242926] hover:text-[#8B956D] disabled:opacity-40 cursor-pointer"
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="flex gap-1 items-center">
+              <input
+                type="text"
+                value={chatInput}
+                autoFocus
+                maxLength={MAX_CHAT_INPUT_CHARS}
+                placeholder={`Say hi to ${pet.name}...`}
+                onChange={e => onChatInputChange?.(e.target.value)}
+                className="flex-1 min-w-0 bg-[#838d66] border border-[#242926] rounded px-1.5 py-1 text-[11px] font-mono text-[#242926] placeholder-[#242926]/50 outline-none select-text"
+              />
+              <button
+                type="button"
+                onClick={onSendChat}
+                disabled={chatLoading || !chatInput.trim()}
+                className="shrink-0 bg-[#242926] text-[#8B956D] text-[11px] font-bold px-2 py-1 rounded disabled:opacity-40 cursor-pointer"
+              >
+                SEND
+              </button>
+            </div>
+
+            <div className="text-[9px] opacity-75 text-center mt-0.5">
+              [B/Enter] Send | [C/Esc] Exit · {chatInput.length}/{MAX_CHAT_INPUT_CHARS}
+            </div>
           </div>
         )}
 
