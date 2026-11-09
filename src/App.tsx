@@ -16,16 +16,8 @@ import { HandheldCase } from './game/components/HandheldCase';
 import { LcdScreen } from './game/components/LcdScreen';
 import type { ScreenMode } from './game/components/LcdScreen';
 import { EncyclopediaModal } from './game/components/EncyclopediaModal';
-import { getLlmService, LlmUnavailableError } from './services/anna/llm';
-import {
-  generatePetReply,
-  getDefaultSuggestions,
-  loadChatHistory,
-  saveChatHistory,
-  appendChatExchange,
-  MAX_CHAT_INPUT_CHARS
-} from './services/anna/chat';
-import type { ChatExchange } from './services/anna/chat';
+import { getLlmService } from './services/anna/llm';
+import { generatePetDialogue } from './services/anna/chat';
 import { loadShellTheme, saveShellTheme } from './game/shellThemes';
 import type { ShellThemeId } from './game/shellThemes';
 
@@ -47,15 +39,13 @@ const App: FC = () => {
   const [isMuted, setIsMuted] = useState(false);
   const [showEncyclopedia, setShowEncyclopedia] = useState(false);
 
-  // AI chat (Anna LLM) — free-text conversation with the pet.
-  // History persists in localStorage (tamagotchi_chat_v1), last 6 exchanges.
-  const [chatHistory, setChatHistory] = useState<ChatExchange[]>(() => loadChatHistory());
-  const [chatInput, setChatInput] = useState('');
-  const [chatLoading, setChatLoading] = useState(false);
-  const [chatError, setChatError] = useState<string | null>(null);
-  const [chatSuggestions, setChatSuggestions] = useState<string[]>([]);
-  const chatHistoryRef = useRef(chatHistory);
-  chatHistoryRef.current = chatHistory;
+  // LLM-generated dialogue (Anna LLM) — one-shot question + 2 options,
+  // generated fresh on every CHAT open. No free text, no history.
+  const [dialogueLoading, setDialogueLoading] = useState(false);
+  // Guards late generatePetDialogue results: bumped whenever the user
+  // leaves the dialogue screen (C/Esc) or resets, so a stale result
+  // never pops a dialogue over another screen.
+  const dialogueRequestRef = useRef(0);
 
   // Handheld shell color theme (persisted between visits)
   const [shellThemeId, setShellThemeId] = useState<ShellThemeId>(() => loadShellTheme());
@@ -63,6 +53,8 @@ const App: FC = () => {
   // Ref to hold latest state for timers/listeners
   const petRef = useRef(pet);
   petRef.current = pet;
+  const activeEventRef = useRef(activeEvent);
+  activeEventRef.current = activeEvent;
 
   // Auto-save pet on change
   useEffect(() => {
@@ -106,9 +98,11 @@ const App: FC = () => {
     setTickerText(`Chatting with ${pet.name}...`);
   }, [pet.name]);
 
-  // CHAT menu: free-text AI chat when Anna LLM is available, otherwise
-  // the canned dialogue flow exactly as before. The LLM check is cached
-  // by the Anna runtime service, so this stays cheap after the first call.
+  // CHAT menu: generate a fresh one-shot dialogue (one question, two
+  // options) with Anna LLM when available, and feed it into the existing
+  // canned dialogue flow verbatim. Any failure falls back to a canned
+  // dialogue exactly as before. The LLM check is cached by the Anna
+  // runtime service, so this stays cheap after the first call.
   const handleChatAction = useCallback(async () => {
     let llmAvailable = false;
     try {
@@ -117,62 +111,44 @@ const App: FC = () => {
     } catch {
       llmAvailable = false;
     }
-    if (llmAvailable) {
-      setChatError(null);
-      // Before the first AI reply, chips show static state-based
-      // suggestions so the user can tap one to start the conversation.
-      setChatSuggestions(
-        getDefaultSuggestions(petRef.current, chatHistoryRef.current.map(e => e.user))
-      );
-      setScreenMode('ai_chat');
-      sound.blip();
-      setTickerText(`Chatting with ${pet.name} — type a message!`);
-    } else {
+    if (!llmAvailable) {
+      triggerDialogue();
+      return;
+    }
+    const requestId = ++dialogueRequestRef.current;
+    setActiveDialogue(null);
+    setDialogueChoice(0);
+    setDialogueLoading(true);
+    setScreenMode('dialogue');
+    sound.blip();
+    setTickerText(`Chatting with ${petRef.current.name}...`);
+    try {
+      const generated = await generatePetDialogue({
+        pet: petRef.current,
+        activeEventTitle: activeEventRef.current?.title
+      });
+      // The user left (C/Esc) or reset while generating — ignore the
+      // late result instead of popping a dialogue over another screen.
+      if (requestId !== dialogueRequestRef.current) return;
+      setDialogueLoading(false);
+      setActiveDialogue({
+        id: `llm-${Date.now()}`,
+        situation: generated.situation,
+        petSays: generated.question,
+        options: generated.options.map(option => ({
+          text: option.text,
+          response: option.response,
+          moodDelta: 10,
+          happinessDelta: 8
+        }))
+      });
+      setDialogueChoice(0);
+    } catch {
+      if (requestId !== dialogueRequestRef.current) return;
+      setDialogueLoading(false);
       triggerDialogue();
     }
-  }, [pet.name, triggerDialogue]);
-
-  // Send one free-text message to the pet via Anna LLM. Called with the
-  // typed input, or with a tapped suggestion chip — same path either way.
-  const sendAiChat = useCallback(async (messageText?: string) => {
-    const text = (messageText ?? chatInput).trim();
-    if (!text || chatLoading) return;
-    const userText = text.slice(0, MAX_CHAT_INPUT_CHARS);
-    setChatInput('');
-    setChatError(null);
-    setChatLoading(true);
-    try {
-      const { reply, suggestions } = await generatePetReply({
-        pet: petRef.current,
-        history: chatHistoryRef.current,
-        userText
-      });
-      const nextHistory = appendChatExchange(chatHistoryRef.current, {
-        user: userText,
-        pet: reply,
-        at: Date.now()
-      });
-      setChatHistory(nextHistory);
-      saveChatHistory(nextHistory);
-      setChatSuggestions(suggestions);
-      setPet(p => ({
-        ...p,
-        mood: Math.min(100, p.mood + 8),
-        happiness: Math.min(100, p.happiness + 6),
-        totalDialogues: p.totalDialogues + 1
-      }));
-      setTickerText(`${petRef.current.name}: "${reply}"`);
-      sound.happy();
-    } catch (error) {
-      setChatError(
-        error instanceof LlmUnavailableError
-          ? 'AI chat is taking a break. Your chat history is safe — try again later!'
-          : 'Hmm, my thoughts got scrambled! Try again?'
-      );
-    } finally {
-      setChatLoading(false);
-    }
-  }, [chatInput, chatLoading]);
+  }, [triggerDialogue]);
 
   // Natural game tick decay (every 10 seconds)
   useEffect(() => {
@@ -342,8 +318,6 @@ const App: FC = () => {
       setEventChoice(c => (c === 0 ? 1 : 0));
     } else if (screenMode === 'status') {
       setStatusPage(p => (p + 1) % 3);
-    } else if (screenMode === 'ai_chat') {
-      // A is a no-op while chatting — the input takes the keystrokes.
     }
   }, [screenMode]);
 
@@ -425,11 +399,6 @@ const App: FC = () => {
       }, 2200);
     } else if (screenMode === 'status') {
       setStatusPage(p => (p + 1) % 3);
-    } else if (screenMode === 'ai_chat') {
-      // B sends the typed message when there is one; A is a no-op here.
-      if (chatInput.trim()) {
-        void sendAiChat();
-      }
     } else if (screenMode === 'evolution') {
       sound.btnB();
       setScreenMode('main');
@@ -447,13 +416,17 @@ const App: FC = () => {
     activeEvent,
     eventChoice,
     verifyEvolution,
-    chatInput,
-    sendAiChat
   ]);
 
   // Button C: Cancel / Back / Right
   const handleButtonC = useCallback(() => {
     sound.btnC();
+    // Leaving the dialogue screen while a dialogue is generating
+    // cancels it: the late result is ignored (see dialogueRequestRef).
+    if (screenMode === 'dialogue') {
+      dialogueRequestRef.current++;
+      setDialogueLoading(false);
+    }
     if (screenMode !== 'main') {
       setScreenMode('main');
       setSelectedMenuIndex(null);
@@ -464,25 +437,9 @@ const App: FC = () => {
     }
   }, [screenMode]);
 
-  // Keyboard controls listener.
-  // CRITICAL: when the user is typing in the chat input, the a/b/c/Enter
-  // keys are keystrokes, not handheld buttons — only Enter (send) and
-  // Escape (exit chat) keep a meaning there.
+  // Keyboard controls listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      const typing =
-        !!target &&
-        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
-      if (typing) {
-        if (e.key === 'Enter' && screenMode === 'ai_chat') {
-          e.preventDefault();
-          void sendAiChat();
-        } else if (e.key === 'Escape') {
-          handleButtonC();
-        }
-        return;
-      }
       if (e.key === 'a' || e.key === 'A' || e.key === '1') {
         handleButtonA();
       } else if (e.key === 'b' || e.key === 'B' || e.key === '2' || e.key === 'Enter') {
@@ -494,7 +451,7 @@ const App: FC = () => {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleButtonA, handleButtonB, handleButtonC, screenMode, sendAiChat]);
+  }, [handleButtonA, handleButtonB, handleButtonC]);
 
   // Fast forward growth & interaction test
   const handleFastForward = useCallback(() => {
@@ -520,6 +477,9 @@ const App: FC = () => {
       setPet(newPet);
       setScreenMode('main');
       setSelectedMenuIndex(null);
+      // Cancel any dialogue still generating for the old pet.
+      dialogueRequestRef.current++;
+      setDialogueLoading(false);
       sound.evolve();
       setTickerText('A brand new digital egg has arrived! Start your adventure~');
     }
@@ -559,14 +519,7 @@ const App: FC = () => {
           foodChoice={foodChoice}
           onSelectAction={executeMenuAction}
           tickerText={tickerText}
-          chatHistory={chatHistory}
-          chatInput={chatInput}
-          onChatInputChange={setChatInput}
-          onSendChat={() => void sendAiChat()}
-          chatSuggestions={chatSuggestions}
-          onSuggestionClick={suggestion => void sendAiChat(suggestion)}
-          chatLoading={chatLoading}
-          chatError={chatError}
+          dialogueLoading={dialogueLoading}
         />
       </HandheldCase>
 

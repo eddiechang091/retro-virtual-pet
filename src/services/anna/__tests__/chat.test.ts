@@ -213,7 +213,8 @@ describe("parsePetDialogueResult", () => {
   });
 
   it("strips markdown code fences around the JSON", () => {
-    const raw = '```json\n{"situation": "Chat", "question": "Peep peep!", "options": [{"text": "Hi there!", "response": "Chirp!"}, {"text": "Let's play!", "response": "Yay!"}]}\n```';
+    const raw =
+      '```json\n{"situation": "Chat", "question": "Peep peep!", "options": [{"text": "Hi there!", "response": "Chirp!"}, {"text": "Let us play!", "response": "Yay!"}]}\n```';
     const parsed = parsePetDialogueResult(raw);
     expect(parsed.question).toBe("Peep peep!");
     expect(parsed.options).toHaveLength(2);
